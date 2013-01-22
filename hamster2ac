@@ -1,0 +1,208 @@
+#!/usr/bin/env python
+# - coding: utf-8 -
+import re
+import os
+import urllib
+import urllib2
+import datetime
+import getpass
+import subprocess
+from hamster import db
+from hamster.lib import stuff
+from xml.dom.minidom import parseString
+from argparse import ArgumentParser
+from ConfigParser import SafeConfigParser
+
+
+DEFAULT_CONFIG = {
+    'export': {
+        'regex': 'https://pro.yinius.com/projects/(?P<project>\d+)/tickets/(?P<ticket>\d+)',
+        'url_attribute': 'name',
+        'ac_url': 'https://pro.yinius.com/api.php',
+        'user_id': 0,
+        'api_key': '',
+        'database_dir': '/home/youruser/.local/hamster-applet',
+        'temp_file': '/home/youruser/.ac_hamster_temp',
+        'text_editor': 'nano'
+    }
+}
+
+
+class ConfigManager(SafeConfigParser):
+    def __init__(self, path, default_cfg={}):
+        SafeConfigParser.__init__(self)
+        self._path = path
+        self._default_cfg = default_cfg
+
+
+    def load_config(self):
+        if os.path.exists(self._path):
+            self.readfp(open(self._path))
+
+        for section in self._default_cfg:
+            self._check_section(section)
+            for option in self._default_cfg[section]:
+                self._check_option(section, option,
+                                   str(self._default_cfg[section][option]))
+
+
+    def save_config(self):
+        self.write(open(self._path, 'w'))
+
+
+    def _check_section(self, section):
+        if not self.has_section(section):
+            self.add_section(section)
+
+
+    def _check_option(self, section, option, default):
+        if not self.has_option(section, option):
+            self.set(section, option, default)
+
+
+class Exporter:
+    def __init__(self, date, cfg):
+        self._cfg = cfg
+        self._storage = db.Storage(database_dir=self._cfg.get('export', 'database_dir'))
+        self._facts = self._storage.get_facts(date, date, '')
+        self._date = date
+
+        self._prepare_facts()
+
+
+    def create_temp_file(self):
+        temp = open(self._cfg.get('export', 'temp_file'), 'w+')
+        for fact in self._facts:
+            temp.write('%s;%s;%s\n' % (fact['name'], fact['description'], fact['duration']))
+        temp.close()
+        # Clear the facts since they're no longer needed
+        del self._facts[:]
+
+
+    def load_temp_file(self):
+        temp = open(self._cfg.get('export', 'temp_file'), 'r')
+        lines = temp.readlines()
+        temp.close()
+
+        for line in lines:
+            args = line.split(';')
+            fact = {}
+            fact['name'] = args[0]
+            fact['description'] = args[1]
+            fact['duration'] = args[2]
+            project_ticket = self._get_project_ticket(fact)
+            if not project_ticket:
+                continue
+            fact.update(project_ticket)
+            self._facts.append(fact)
+
+
+    def _prepare_facts(self):
+        facts_prepared = []
+        facts = []
+        for k, fact in enumerate(self._facts):
+            if fact['name'] in facts_prepared:
+                continue
+            project_ticket = self._get_project_ticket(fact)
+            if not project_ticket:
+                # No valid AC url found
+                continue
+            fact.update(project_ticket)
+            fact_group = self._find_facts(k)
+            for f in fact_group:
+                fact['delta'] += f['delta']
+                fact['description'] += ', %s' % (f['description'])
+            fact['duration'] = stuff.format_duration(fact['delta'], human=False)
+            facts.append(fact)
+            facts_prepared.append(fact['name'])
+        self._facts = facts
+
+
+    def _find_facts(self, k):
+        ''' Find facts similar to the fact with the specified key '''
+        facts = []
+        for key, fact in enumerate(self._facts):
+            if key == k:
+                continue
+            if fact['name'] == self._facts[k]['name']:
+                facts.append(fact)
+
+        return facts
+
+
+    def submit_activities(self):
+        date = self._date.strftime("%Y-%m-%d")
+        for fact in self._facts:
+            self.submit_activity(fact, date)
+
+
+    def submit_activity(self, fact, date):
+        ac_url = self._cfg.get('export', 'ac_url')
+        api_key = self._cfg.get('export', 'api_key')
+        req = urllib2.Request('%s?path_info=/projects/%s/time/add&token=%s' %\
+                              (ac_url, fact['project'], api_key))
+        context = {
+            "submitted":"submitted",
+            "time[user_id]": self._cfg.get('export', 'user_id'),
+            "time[value]": fact['duration'],
+            "time[record_date]": date,
+            "time[body]": fact['description'],
+            "time[parent_id]":fact['ticket'],
+            "time[billable_status]": 0,
+        }
+
+        context = urllib.urlencode(context)
+        urllib2.urlopen(req, context)
+
+
+    def _get_project_ticket(self, fact):
+        url = re.match(self._cfg.get('export', 'regex'),
+                       fact[self._cfg.get('export', 'url_attribute')])
+        if url:
+            # project, ticket
+            groups = url.groupdict()
+            # Get real ticket id
+            groups['ticket'] = self._fetch_ticket_id(groups['project'], groups['ticket'])
+            return groups
+
+
+    def _fetch_ticket_id(self, proj_id, ticket_id_in_proj):
+        ac_url = self._cfg.get('export', 'ac_url')
+        api_key = self._cfg.get('export', 'api_key')
+        req = urllib2.Request('%s?path_info=/projects/%s/tickets/%s/&token=%s&format=xml' % \
+                              (ac_url, proj_id, ticket_id_in_proj, api_key))
+
+        try:
+            f = urllib2.urlopen(req)
+        except:
+            print "Couldn't fetch ticket id from %s\n" % (ticket_id_in_proj)
+            return False #TODO NEED POPUP ALERT!
+        result = parseString(f.read())
+        ticket_id = result.getElementsByTagName('id')[0].childNodes[0].nodeValue
+        return ticket_id
+
+
+# Load configuration
+user = getpass.getuser()
+path = '/home/%s/.hamster2ac.conf' % (user)
+config = ConfigManager(path, DEFAULT_CONFIG)
+config.load_config()
+config.save_config()
+
+
+# Prepare parser
+parser = ArgumentParser()
+parser.add_argument('-d', '--date', dest='date')
+args = parser.parse_args()
+if not args.date:
+    args.date = datetime.date.today()
+else:
+    args.date = datetime.datetime.strptime(args.date, "%Y-%m-%d").date()
+
+
+exp = Exporter(args.date, config)
+exp.create_temp_file()
+subprocess.call([config.get('export', 'text_editor'),
+                 config.get('export', 'temp_file')])
+exp.load_temp_file()
+exp.submit_activities()
