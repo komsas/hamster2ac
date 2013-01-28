@@ -148,7 +148,7 @@ class Exporter:
             "time[record_date]": date,
             "time[body]": fact['description'],
             "time[parent_id]":fact['ticket'],
-            "time[billable_status]": 0,
+            "time[billable_status]": 1,
         }
 
         context = urllib.urlencode(context)
