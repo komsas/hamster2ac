@@ -1,0 +1,13 @@
+Hamster2ac - tool for sending a logged time on Hamster to ActiveCollab   
+
+h1. Installing
+./setup.py install
+
+h1. Posting time to ActiveCollab 
+
+hamster2ac --help
+
+h1. Using Hamster
+
+* Activity - ActiveCollab ticket url, example: https://www.activecollab.com/projects/1/tickets/20
+* Description - short description about ticket
