@@ -106,16 +106,17 @@ class Exporter:
         facts = {}
         for k, values in facts_grouped.iteritems():
             for val in values:
+                desc = val['description'] or ''
                 if k not in facts:
                     facts[k] = {
-                        'description': [val['description']],
+                        'description': [desc],
                         'delta': val['delta'],
                         'ticket': val['ticket'],
                         'name': val['name'],
                     }
                 else:
                     facts[k]['delta'] += val['delta']
-                    facts[k]['description'].append(val['description'])
+                    facts[k]['description'].append(desc)
             facts[k]['description'] = ", ".join(set(facts[k]['description']))
             facts[k]['duration'] = stuff.format_duration(facts[k]['delta'], human=False)
         self._facts = facts.values()
