@@ -163,6 +163,9 @@ class Exporter:
 
 
     def _fetch_ticket_id(self, proj_id, ticket_id_in_proj):
+        if not (proj_id and ticket_id_in_proj):
+            return False
+
         ac_url = self._cfg.get('export', 'ac_url')
         api_key = self._cfg.get('export', 'api_key')
         req = urllib2.Request('%s/api.php?path_info=/projects/%s/tickets/%s/&token=%s&format=xml' % \
